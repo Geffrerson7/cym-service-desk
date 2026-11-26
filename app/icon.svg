@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -4 64 64" fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <style>
+    .m { stroke: #0e1419; }
+    .s { stroke: #006b7a; }
+    @media (prefers-color-scheme: dark) {
+      .m { stroke: #e6edf2; }
+      .s { stroke: #5ce3f6; }
+    }
+  </style>
+  <rect class="m" x="4" y="4" width="56" height="38" rx="8"/>
+  <path class="s" d="M13 24H21L29 32L50 13"/>
+  <path class="m" d="M24 52H40"/>
+</svg>
