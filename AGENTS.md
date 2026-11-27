@@ -23,13 +23,27 @@ Este archivo vive en la raíz del proyecto (`cym-service-desk/`). Todas las ruta
 
 Si el código y la documentación se contradicen, manda la documentación; si dos documentos se contradicen, pregunta antes de implementar. No implementes nada listado como "Fuera del alcance del MVP".
 
+**`docs/` es local y no se versiona** (está en `.gitignore` a propósito, porque contiene información del cliente). Nunca la quites del `.gitignore`, no subas su contenido al repositorio y no copies fragmentos de la transcripción ni datos del cliente en el código, en los commits ni en los PR. Si `docs/` no existe en tu entorno (por ejemplo, en un clon nuevo, un worktree o un agente en la nube), **detente y pide los documentos al usuario**; no supongas los requisitos.
+
+## Skills (procedimientos detallados)
+Este archivo tiene las reglas que aplican siempre. Los procedimientos largos de tareas puntuales viven en `.claude/skills/<nombre>/SKILL.md`. Si tu herramienta no carga skills automáticamente, lee el archivo antes de empezar la tarea correspondiente.
+
+| Skill | Léela cuando… |
+| --- | --- |
+| `new-feature` | Empiezas una historia de usuario o una funcionalidad nueva |
+| `local-db` | Creas o cambias `compose.yaml`, preparas el entorno local o reinicias la base |
+| `ci-workflow` | Tocas `.github/workflows/ci.yml`, falla el CI o cambias los scripts de `package.json` |
+| `demo-mode` | Trabajas en el login, `DEMO_MODE`, la cuenta `DEMO` o `prisma/seed-demo.ts` |
+| `print-receipt` | Trabajas en la vista de impresión de la orden |
+| `brand-settings` | Trabajas en "Configuración > Marca", el logo propio o `app/icon.tsx` / `app/apple-icon.tsx` |
+
 ## Stack (no negociable)
 - **Framework:** Next.js **16.4.6** (App Router) con React **19.3** y TypeScript. Es más nuevo que tus datos de entrenamiento: consulta `node_modules/next/dist/docs/` antes de usar una API (ver bloque de Next.js arriba). Ejemplos: el antiguo `middleware.ts` ahora es `proxy.ts`; `cacheComponents` está activado en `next.config.ts`.
 - **Base de datos:** PostgreSQL en Neon (vista previa, demo y producción) y PostgreSQL en **Docker** solo para desarrollo local (ver "Entorno de desarrollo local").
 - **ORM:** Prisma **v7.10.1** (ver sección Prisma).
 - **Autenticación:** Better Auth (email y contraseña, sesiones en base de datos, caché en cookie cifrada JWE y plugin JWT).
 - **Almacenamiento de imágenes:** Cloudinary (subida firmada desde el servidor, nunca con upload presets sin firmar; tipo de entrega `authenticated` y URLs firmadas generadas en el servidor; en la base de datos solo se guarda el `public_id` de cada foto).
-- **Validación:** Zod.
+- **Validación:** Zod **4**. Usa la API de v4: formatos de nivel superior (`z.email()`, `z.url()`, `z.uuid()`) en vez de `z.string().email()`, y el parámetro `error` en vez de `message` (obsoleto en v4).
 - **Pruebas:** Vitest.
 - **Formato:** Prettier con `prettier-plugin-tailwindcss` (ver "Formato de código").
 - **Estilos:** Tailwind CSS **4.3** y CSS.
@@ -41,6 +55,9 @@ No reemplaces ni agregues frameworks, ORM, bases de datos, librerías de autenti
 - Usa siempre **pnpm** (`pnpm install`, `pnpm add`, `pnpm dlx`, `pnpm run <script>`). No uses `npm`, `npx`, `yarn` ni `bun`. El único lockfile permitido es `pnpm-lock.yaml`.
 - **Definición de terminado:** antes de dar una tarea por completa deben pasar `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test` y `pnpm build`, los mismos pasos del CI (ver "Integración continua"). Si cambias el esquema de Prisma, crea también su migración. Si alguno falla, repórtalo; no lo ocultes.
 - **Pruebas:** se usa **Vitest** (`pnpm test` ejecuta `vitest run`). Los archivos de prueba van junto al código que prueban con el sufijo `.test.ts`. Como mínimo deben tener pruebas unitarias: la máquina de estados, el cálculo de liquidación, la vigencia de garantía de producto y el plazo de garantía de servicio.
+  - **Unitarias** (`*.test.ts`): lógica pura de `services/` y `lib/`, sin base de datos. Son la mayoría.
+  - **De integración** (`*.int.test.ts`): repositorios y transacciones contra Postgres real. Leen `TEST_DATABASE_URL` (en local, la base `cym_test` de Docker; en el CI, la del servicio `postgres`) y se omiten con un aviso si no está definida. Nunca usan `DATABASE_URL` ni la base de desarrollo. Cada prueba limpia sus propios datos.
+  - Las pruebas de fechas fijan el reloj (`vi.setSystemTime`) y cubren el cambio de día en `America/Lima` (por ejemplo, 23:30 en Lima ya es el día siguiente en UTC).
 
 ## Formato de código (Prettier)
 - Configuración en `prettier.config.mjs`, con los valores por defecto de Prettier (comillas dobles, punto y coma, 80 columnas, fin de línea LF) y el plugin `prettier-plugin-tailwindcss`.
@@ -59,24 +76,36 @@ Monolito modular en 3 capas, en la raíz del proyecto (sin carpeta `src/`):
 
 `lib/` queda reservada para configuraciones base (`auth.ts`, `cloudinary.ts`), esquemas Zod compartidos y utilidades puras (formato de moneda y fechas).
 
-**Resultado de Server Actions:** devuelve siempre `{ ok: true, data } | { ok: false, error: string }` con `error` en español, listo para mostrar al usuario. Nunca envíes al navegador mensajes internos, stack traces ni errores de Prisma.
+### Dónde vive cada cosa
+| Pieza | Ubicación |
+| --- | --- |
+| Tipo `ActionResult<T>` | `lib/action-result.ts` |
+| Esquemas Zod | `lib/schemas/<dominio>.ts` (`order.ts`, `customer.ts`, …), compartidos por la Server Action y el formulario |
+| Fechas en `America/Lima` | `lib/dates.ts` (única puerta para calcular y formatear fechas de negocio) |
+| Formato de moneda | `lib/money.ts` |
+| Estados (etiquetas y clases) | `lib/order-status.ts` |
+| Máquina de estados | `services/order-state-machine.ts` |
+| Server Actions | `actions.ts` junto a la ruta que las usa (por ejemplo `app/(panel)/ordenes/actions.ts`) |
+| Servicios y repositorios | `services/<dominio>.ts` y `repositories/<dominio>.ts`, un archivo por dominio |
 
-## Entorno de desarrollo local (Docker + PostgreSQL)
-- En desarrollo la base de datos es **PostgreSQL en Docker**, nunca Neon. Neon queda para los despliegues de Vercel (vista previa, demo y producción). Así no se ensucian las ramas de Neon y se puede trabajar sin conexión.
-- El servicio se define en `compose.yaml` (raíz del proyecto) con Docker Compose:
-  - Imagen oficial `postgres:17`: la misma versión mayor que Neon y que el servicio del CI.
-  - Nombre del servicio `db`, puerto `5432:5432`, volumen con nombre `cym-pgdata` para que los datos sobrevivan al reiniciar, y `healthcheck` con `pg_isready`.
-  - Usuario, contraseña y base salen de variables del `.env` local (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`), con valores por defecto solo para desarrollo. No escribas contraseñas en `compose.yaml`.
-  - Una segunda base, `cym_test`, para las pruebas de integración de Vitest, creada con un script en `docker/initdb/`. Las pruebas nunca usan la base de desarrollo.
-- En el `.env` local, `DATABASE_URL` y `DATABASE_URL_UNPOOLED` apuntan al mismo Postgres de Docker (`postgresql://<usuario>:<contraseña>@localhost:5432/<base>`). En local no hay pooler, así que las dos URLs son iguales. `.env.example` documenta estos valores de desarrollo.
-- Flujo de trabajo:
-  1. `docker compose up -d`: levanta Postgres.
-  2. `pnpm prisma migrate dev`: aplica y crea migraciones (solo contra Docker; nunca `migrate dev` contra Neon).
-  3. `pnpm prisma db seed`: crea el `ADMIN_GENERAL` inicial y los datos base. Con `DEMO_MODE=true` en el `.env` local también se pueden cargar los datos ficticios de la demo para probarla.
-  4. `pnpm dev`.
-  - Para borrar todo y empezar de cero: `docker compose down -v` y repetir los pasos.
-- **Contra Neon solo corre `pnpm prisma migrate deploy`**, en el despliegue. Ninguna tarea de desarrollo apunta a Neon.
-- Docker es solo una herramienta de desarrollo: la app no se despliega en contenedores (se despliega en Vercel), así que no crees un `Dockerfile` para la app.
+### Rutas (App Router)
+Las URLs se escriben en **español** (son texto visible para el usuario); las carpetas que no son URL (grupos, componentes, código) siguen en inglés.
+- `app/(auth)/login`: inicio de sesión (vitrina).
+- `app/(panel)/…`: zona privada con su layout (barra lateral, cabecera, aviso demo): `ordenes`, `ordenes/[id]`, `ordenes/[id]/imprimir`, `clientes`, `configuracion` (sucursales, personal, tarifas y marca).
+- `app/seguimiento/[token]`: consulta pública del cliente (vitrina).
+- `app/api/…`: rutas de API autenticadas con JWT.
+- `proxy.ts` solo redirige a `/login` si no hay cookie de sesión; **no** es una barrera de seguridad. Los permisos se validan siempre en `services/`.
+
+### Resultado de Server Actions y errores
+- Devuelve siempre `ActionResult<T>`: `{ ok: true, data } | { ok: false, error: string }`, con `error` en español, listo para mostrar al usuario. Nunca envíes al navegador mensajes internos, stack traces ni errores de Prisma.
+- Los errores esperados (validación, permisos, reglas de negocio) se devuelven como `{ ok: false }` desde `services/`, sin lanzar excepciones.
+- Los errores inesperados se capturan en la Server Action: se registran en el servidor con `console.error` (con el nombre de la acción y el `id` del usuario, **sin** DNI, teléfonos, correos, contraseñas ni tokens) y se responde "Ocurrió un error inesperado. Inténtalo de nuevo.".
+- `redirect()` y `notFound()` lanzan excepciones internas de Next.js: llámalos fuera del `try/catch` o vuelve a lanzarlas.
+
+## Entorno de desarrollo local
+- En desarrollo la base de datos es **PostgreSQL 17 en Docker** (`compose.yaml`), nunca Neon. Detalle en la skill `local-db`.
+- **Contra Neon solo corre `pnpm prisma migrate deploy`**, en el despliegue. Ninguna tarea de desarrollo apunta a Neon y nunca se ejecuta `migrate dev` contra Neon.
+- No crees un `Dockerfile` para la app: se despliega en Vercel.
 
 ## Prisma 7.10.1
 - El esquema (`prisma/schema.prisma`) **no lleva URL de conexión**. La URL para la CLI y las migraciones va en `prisma.config.ts` con `env('DATABASE_URL_UNPOOLED')`.
@@ -90,6 +119,7 @@ Monolito modular en 3 capas, en la raíz del proyecto (sin carpeta `src/`):
 Solo en el servidor; nunca con prefijo `NEXT_PUBLIC_` ni enviadas al navegador. Mantén `.env.example` actualizado (sin valores reales) y nunca subas `.env` al repositorio.
 - `DATABASE_URL` (runtime) y `DATABASE_URL_UNPOOLED` (migraciones). En Vercel: Neon con pooler y Neon directo. En local: las dos apuntan al Postgres de Docker.
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`: solo en el `.env` local, para `compose.yaml`.
+- `TEST_DATABASE_URL`: base de las pruebas de integración (`cym_test` en local, el servicio `postgres` en el CI). Nunca apunta a Neon.
 - `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`
 - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
 - `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`
@@ -103,18 +133,14 @@ Solo en el servidor; nunca con prefijo `NEXT_PUBLIC_` ni enviadas al navegador. 
 - **Desactivar una cuenta** revoca todas sus sesiones, para que la caché en cookie no la mantenga activa.
 - **Caché:** con `cacheComponents` activado, nunca uses `"use cache"` en datos que dependan del usuario, del rol, de la sucursal ni del token público.
 - **Mínima exposición:** el servidor decide pantallas y opciones según el rol y envía a los Client Components solo los datos que van a mostrar. La interfaz sí muestra el nombre, el rol y la sucursal del propio usuario.
+- **Límite de intentos:** el rate limit integrado de Better Auth **no se aplica** a las llamadas `auth.api` hechas desde el servidor, y en Vercel la memoria no se comparte entre instancias. Por eso el inicio de sesión (Server Action con `auth.api`) y aprobar o rechazar por token público limitan los intentos en `services/`, con un contador en una tabla de PostgreSQL (por IP y por correo o token, con ventana de tiempo). Sin librerías nuevas. Al superar el límite: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.".
+- **URLs firmadas de Cloudinary:** se generan en el servidor en cada render, con vencimiento corto (por ejemplo 1 hora), y nunca se guardan en la base ni en una caché que dure más que la URL.
 
 ## Roles y permisos
 Enum `Role`: `ADMIN_GENERAL`, `ADMIN_SUCURSAL`, `TECNICO`, `DEMO`. El **cliente no es un usuario** ni un valor de `Role`: no tiene cuenta y solo accede por enlace o QR.
 - `DEMO` (jurado y visitantes): **solo lectura**. Ve las mismas pantallas y datos que `ADMIN_GENERAL`, pero toda mutación (Server Action o ruta de API distinta de `GET`) se rechaza **en `services/`** con el mensaje "La cuenta demo es de solo lectura." Ocultar botones en la interfaz no es suficiente. La interfaz muestra un aviso fijo "Modo demo · solo lectura" y deja visibles pero deshabilitados los botones de acción, para que se pueda recorrer el producto.
-- **La demo nunca usa datos reales.** Corre en un despliegue y una rama de Neon separados (`DEMO_MODE=true`), con datos ficticios creados por `prisma/seed-demo.ts`. En ese modo, la vista pública de seguimiento también es de solo lectura (aprobar o rechazar cotizaciones queda deshabilitado). La cuenta `DEMO` no existe en producción.
-- **Botón "Entrar como demo":** el jurado y los visitantes entran a la demo sin escribir credenciales.
-  - Aparece en la pantalla de inicio de sesión **solo si `DEMO_MODE=true`**. Lo decide el servidor; el botón no se envía al navegador en otro caso.
-  - Es un formulario sin campos que llama a una Server Action. La acción vuelve a comprobar `DEMO_MODE=true` (si no, responde con error y no hace nada), lee `DEMO_USER_EMAIL` y `DEMO_USER_PASSWORD` de las variables de entorno e inicia sesión **en el servidor** con Better Auth (`auth.api` con email y contraseña), que deja la cookie de sesión. Luego redirige al panel.
-  - Las credenciales demo **nunca** se envían al navegador: ni en props, ni en campos ocultos, ni en el HTML, ni con `NEXT_PUBLIC_`. El usuario no las ve ni puede copiarlas.
-  - La sesión demo sigue todas las reglas normales: el servidor carga el usuario y aplica el rol `DEMO` (solo lectura) en cada acción.
-  - Si la cuenta demo no existe o está desactivada, se muestra "La demo no está disponible en este momento." sin revelar el motivo.
-  - El botón es parte de la vitrina: va debajo del formulario normal, separado por "o", con el texto exacto "Entrar como demo" y una línea de ayuda "Recorre el sistema con datos de ejemplo, en solo lectura.".
+- **La demo nunca usa datos reales.** Corre en un despliegue y una rama de Neon separados (`DEMO_MODE=true`), con datos ficticios creados por `prisma/seed-demo.ts`. En ese modo, la vista pública de seguimiento también es de solo lectura. La cuenta `DEMO` no existe en producción.
+- **Botón "Entrar como demo":** solo aparece si `DEMO_MODE=true` (lo decide el servidor) e inicia sesión en el servidor con una Server Action. Las credenciales demo **nunca** llegan al navegador. Detalle, textos exactos y mensajes en la skill `demo-mode`.
 - `ADMIN_GENERAL` (dueño): acceso total a todas las sucursales (con filtro opcional por sucursal), gestión de sucursales, personal, tarifas globales y marca (logo e ícono). Puede hacer todo lo que hace un `ADMIN_SUCURSAL` en cualquier sucursal.
 - `ADMIN_SUCURSAL` (recepción / caja): solo opera y ve el detalle de las órdenes de su sucursal. En el historial global de un cliente, las órdenes de otras sucursales se muestran solo en resumen (número, sucursal, equipo, estado y fecha), sin acceso al detalle.
 - `TECNICO`: pertenece a una sucursal; solo ve y actualiza las órdenes asignadas a su propio `id`. No accede a la sección de Clientes.
@@ -203,12 +229,7 @@ Si hace falta un token nuevo, agrégalo en `app/globals.css` con valor claro y o
 - La vista pública del cliente no muestra el código interno del estado: usa las etiquetas en lenguaje sencillo del punto 26 de `docs/prompt-1.md`, con los mismos colores.
 
 ### Impresión (comprobante en hoja A4)
-- `@page { size: A4; margin: 12mm }` está definido en `app/globals.css`. El comprobante debe caber en **una sola hoja A4** vertical.
-- La orden tiene una vista de impresión propia (botón "Imprimir" que llama a `window.print()`). Lo que no forma parte del comprobante (barra lateral, menús, botones, botón de tema, avisos) lleva `print:hidden`. Lo que solo debe salir en papel lleva `hidden print:block`. No crees clases como `.no-print`.
-- Contenido mínimo, tomando como modelo `docs/orden-de-servicio-fisica.pdf`: datos de la sucursal (nombre, dirección, WhatsApp y horario), número de orden y fecha, tipo de ingreso (servicio técnico o garantía), datos del cliente, equipo (tipo, marca, modelo, serie), falla reportada, accesorios, estado físico y observaciones, código QR y enlace de seguimiento, y espacio para las firmas del cliente y de recepción. Si es garantía: comprobante de compra, fecha de compra y plazo. **Nunca imprime las fotos.**
-- Al imprimir se usa siempre el tema claro (blanco y negro), aunque la pantalla esté en oscuro. Evita fondos de color en el comprobante; usa bordes y texto.
-- El QR se renderiza en **SVG** (nunca en una imagen rasterizada pequeña) para que salga nítido, con un tamaño mínimo de 3 cm.
-- Usa `break-inside-avoid` en bloques que no deben partirse.
+- El comprobante cabe en **una sola hoja A4** vertical, sale siempre en tema claro y **nunca imprime las fotos**. Lo que no es comprobante lleva `print:hidden`; no crees clases como `.no-print`. Contenido mínimo, QR y verificación en la skill `print-receipt`.
 
 ### Tipografía, idioma y layout
 - Fuente de interfaz: Geist (`font-sans`) y Geist Mono (`font-mono`, para números de orden, DNI y montos en tablas), cargadas con `next/font` en `app/layout.tsx`.
@@ -236,13 +257,7 @@ Si hace falta un token nuevo, agrégalo en `app/globals.css` con valor claro y o
   - El monitor va en `currentColor` y la señal en `accent-ink`. Al imprimir todo sale en negro (`print:stroke-current`).
   - Variante `full` desde 32 px y `compact` (pulso simplificado a un check, trazo más grueso) para 24 px o menos. El favicon es `app/icon.svg` (versión `compact`, se adapta al tema del sistema). El ícono de iPhone es `app/apple-icon.tsx`: genera un PNG de 180 × 180 con `ImageResponse` de `next/og`, con fondo grafito sólido porque iOS no acepta transparencia. Es la única excepción a la regla de no usar `style={{}}`, ya que `ImageResponse` solo admite estilos en línea.
   - Con `animated`, el logo se dibuja al montarse (monitor → señal → base) con `animate-logo-draw`. Solo en la vitrina y solo con `motion-safe:`.
-- **Marca personalizable (HU-34 y HU-35, punto 27 de `docs/prompt-1.md`):** el `ADMIN_GENERAL` puede reemplazar el logo y el ícono desde "Configuración > Marca". Ningún otro rol la ve; `DEMO` la ve en solo lectura.
-  - **Datos:** en el registro global de configuración (el mismo de las tarifas) se guardan `logoPublicId`, `iconPublicId` (ambos opcionales) y `showBrandName` (boolean, por defecto `true`). Si un `publicId` es `null`, se usa el predeterminado ("Señal"). Cada cambio y cada restauración queda en el historial de auditoría.
-  - **Validación en el servidor (`services/`):** solo PNG o WebP, verificados por su contenido (bytes iniciales del archivo), no por la extensión ni por el `Content-Type` que manda el navegador. Logo: hasta 2 MB y mínimo 400 px de ancho. Ícono: cuadrado, mínimo 512 × 512 px y hasta 1 MB. **SVG prohibido** (puede contener scripts).
-  - **Cloudinary:** subida firmada desde el servidor, entrega `authenticated` y URLs firmadas generadas en el servidor, como las fotos. Al reemplazar o restaurar, se borra de Cloudinary el archivo anterior.
-  - **Render:** `components/brand/logo.tsx` recibe del servidor la URL firmada (o `null`) y `showBrandName`; nunca construye URLs en el cliente. Con logo propio, la imagen reemplaza al isotipo y el texto "CyM · COMPUTADORAS E INGENIERÍA" aparece solo si `showBrandName` es `true`. El `alt` es "CYM Computadoras e Ingeniería". En el comprobante A4 el logo se imprime en escala de grises (`print:grayscale`).
-  - **Íconos:** `app/icon.svg` pasa a ser `app/icon.tsx` y `app/apple-icon.tsx` lee la configuración. Ambos generan el PNG desde el ícono propio o, si no hay, desde "Señal" (fondo grafito sólido para iOS).
-  - **Caché:** como la marca no depende del usuario, su lectura puede usar `"use cache"` con `cacheTag("brand")`. La Server Action que guarda o restaura llama a `updateTag("brand")` (Next 16: invalida de inmediato, para que el administrador vea su cambio al instante; `revalidateTag` solo fuera de Server Actions). La URL firmada debe vencer **después** de que caduque la caché (`cacheLife`), para que nunca se sirva una URL vencida.
+- **Marca personalizable (HU-34 y HU-35, punto 27 de `docs/prompt-1.md`):** solo el `ADMIN_GENERAL` reemplaza el logo y el ícono ("Configuración > Marca"); `DEMO` la ve en solo lectura. Solo PNG o WebP verificados por sus bytes iniciales; **SVG prohibido**. Es la única lectura que puede usar `"use cache"` (`cacheTag("brand")`). Detalle en la skill `brand-settings`.
 - **El logo como sistema:** la señal es un elemento de la interfaz, no solo del logo. La línea de progreso de la vista pública de seguimiento es la misma señal: cada estado de la orden es un tramo y, al llegar a "Listo para recojo", el trazo cierra en el check. Se dibuja en `accent-ink` con el mismo grosor y las mismas uniones redondeadas. No inventes otra barra de progreso.
 - El logotipo completo (`components/brand/logo.tsx`) combina el isotipo con el texto **"CyM"** y, debajo, **"COMPUTADORAS E INGENIERÍA"**, escritos como texto HTML (nunca dentro del SVG). Así el texto se puede leer, seleccionar y adaptar.
 
@@ -266,38 +281,10 @@ Objetivo: concurso Awwwards, entrega el **7 de diciembre de 2026**. La landing p
 | 5. Vitrina | 3 | Momentos "hero" en el login y la vista pública (Motion/GSAP), modo demo pulido y datos demo creíbles | Recorrido completo con la cuenta `DEMO` sin errores; metas de Lighthouse cumplidas |
 
 ## Integración continua (GitHub Actions)
-El CI ejecuta exactamente la **definición de terminado**: si pasa en local, debe pasar en el CI, y al revés. El CI **no despliega**: el despliegue lo hace la integración de Git de Vercel (vista previa en cada PR, producción al fusionar en `main`).
-
-### Archivo y disparadores
-- Un único workflow: `.github/workflows/ci.yml`, con nombre `CI` y un job `verify` en `ubuntu-latest`.
-- Se ejecuta en `pull_request` hacia `main` y en `push` a `main`. No se ejecuta si el cambio solo toca `docs/**` (con `paths-ignore`, sin patrones de negación `!`). Los `.md` fuera de `docs/` (como `AGENTS.md`) sí lo disparan, para que el check obligatorio `CI / verify` se reporte en esos PR.
-- `concurrency` por rama (`ci-${{ github.ref }}`) con `cancel-in-progress: true`, para que un push nuevo cancele la ejecución anterior.
-- `timeout-minutes: 15`.
-
-### Seguridad
-- `permissions: contents: read` a nivel de workflow; ningún job pide más permisos.
-- Las acciones de terceros se fijan por **SHA completo del commit**, con la versión en un comentario (`actions/checkout@<sha> # v5.x.x`), nunca por etiqueta móvil (`@v5`, `@main`). Al crear o actualizar el workflow, consulta la versión estable vigente de cada acción.
-- **Sin secretos reales en el CI.** No se conecta a Neon, Cloudinary ni Better Auth de verdad. Las variables de entorno necesarias para compilar llevan valores ficticios declarados en el propio workflow (por ejemplo `BETTER_AUTH_SECRET: ci-dummy-secret-not-used-in-production`). Si algún paso necesita un secreto real, detente y pide autorización.
-- El código no debe acceder a la base de datos ni a servicios externos durante `pnpm build`: las páginas con datos son dinámicas y quedan detrás de `<Suspense>`. Si el build falla por falta de conexión, el error está en el código, no en el CI.
-
-### Entorno
-- Node.js **24 (LTS)** con `actions/setup-node`, usando `cache: pnpm`.
-- pnpm con `pnpm/action-setup`. La versión sale del campo `packageManager` de `package.json`; no la repitas en el workflow.
-- `NEXT_TELEMETRY_DISABLED: 1` y `TZ: UTC`, para reproducir el entorno de Vercel y detectar errores de zona horaria (las fechas de negocio se calculan en `America/Lima`).
-- Caché de `.next/cache` con `actions/cache`, con una clave que combine el hash de `pnpm-lock.yaml` y el de los archivos fuente.
-- Servicio `postgres` (imagen oficial, versión mayor igual a la de Neon) con healthcheck. Solo se usa para validar migraciones y para pruebas de integración, nunca con datos reales.
-
-### Pasos del job `verify` (en este orden; cualquier fallo detiene el job)
-1. `actions/checkout`.
-2. Configurar pnpm y Node (con caché del store).
-3. `pnpm install --frozen-lockfile`. Falla si `pnpm-lock.yaml` no coincide con `package.json`; nunca uses `--no-frozen-lockfile` en el CI.
-4. `pnpm prisma generate`.
-5. **Migraciones:** `pnpm prisma migrate deploy` contra el Postgres del servicio, para comprobar que todas las migraciones se aplican desde cero. Después, `pnpm prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code` (flags verificados en Prisma 7.10.1), que falla si hay cambios en el esquema sin migración. Los pasos de Prisma solo se ejecutan cuando existe `prisma/schema.prisma`.
-6. `pnpm format:check`.
-7. `pnpm lint`.
-8. `pnpm typecheck`.
-9. `pnpm test` (Vitest, con `DATABASE_URL` apuntando al Postgres del servicio para las pruebas de integración).
-10. `pnpm build`.
+- Un único workflow, `.github/workflows/ci.yml` (job `verify`), que ejecuta exactamente la **definición de terminado**. No despliega: Vercel despliega desde Git.
+- Sin secretos reales: no se conecta a Neon, Cloudinary ni Better Auth de verdad. Acciones fijadas por SHA completo. `pnpm build` no debe acceder a la base ni a servicios externos.
+- Si el CI falla, se corrige la causa: nada de `continue-on-error`, `skip` ni `--no-verify` sin avisar al usuario.
+- Detalle completo (disparadores, entorno, pasos y reglas) en la skill `ci-workflow`.
 
 ### Scripts requeridos en `package.json`
 | Script | Comando |
@@ -305,18 +292,16 @@ El CI ejecuta exactamente la **definición de terminado**: si pasa en local, deb
 | `format` | `prettier --write .` |
 | `format:check` | `prettier --check .` |
 | `lint` | `eslint` |
-| `typecheck` | `tsc --noEmit` |
+| `typecheck` | `next typegen && tsc --noEmit` (genera primero los tipos de rutas de Next.js) |
 | `test` | `vitest run` |
 | `build` | `next build` |
 
 La definición de terminado y el CI usan estos nombres. Si cambias uno, actualiza ambos.
 
-### Reglas de trabajo
-- `main` está protegida: solo se fusiona por PR y con el check `CI / verify` en verde. No se usa `--no-verify` ni se omiten pasos para que el CI pase.
-- Si el CI falla, se corrige la causa. No se desactiva el paso, no se agregan `continue-on-error` ni se marcan pruebas como `skip` sin avisar al usuario.
-- El desarrollo es en Windows y el CI corre en Linux. `.gitattributes` fija `* text=auto eol=lf` para evitar diferencias de fin de línea, y las rutas de importación deben respetar mayúsculas y minúsculas exactas, porque Linux las distingue.
-- **Fuera del CI por ahora** (requieren autorización, porque agregan herramientas): Lighthouse CI para las metas de la vitrina, pruebas end-to-end con navegador y Dependabot o Renovate.
-
 ## Git
-- Commits pequeños en español, en modo imperativo y con prefijo de tipo: `feat: registrar orden de servicio`, `fix: ...`, `chore: ...`.
+- `main` está protegida: solo se fusiona por PR con el check `CI / verify` en verde.
+- Ramas con prefijo de tipo y descripción corta en inglés con guiones: `feat/service-order-intake`, `fix/...`, `docs/...`, `chore/...`, `ci/...`.
+- Commits pequeños en español, en modo imperativo y con prefijo de tipo: `feat: registrar orden de servicio`, `fix: ...`, `docs: ...`, `chore: ...`, `ci: ...`, `test: ...`.
+- El PR describe qué cambia, qué historia de usuario (HU-xx) cubre y cómo se verificó.
+- El desarrollo es en Windows y el CI en Linux: respeta mayúsculas y minúsculas exactas en las rutas de importación.
 - No hagas commit ni push sin que el usuario lo pida.
