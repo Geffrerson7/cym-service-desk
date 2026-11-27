@@ -270,7 +270,7 @@ El CI ejecuta exactamente la **definición de terminado**: si pasa en local, deb
 
 ### Archivo y disparadores
 - Un único workflow: `.github/workflows/ci.yml`, con nombre `CI` y un job `verify` en `ubuntu-latest`.
-- Se ejecuta en `pull_request` hacia `main` y en `push` a `main`. No se ejecuta si el cambio solo toca `docs/**` o archivos `**/*.md` (con `paths-ignore`, sin patrones de negación `!`).
+- Se ejecuta en `pull_request` hacia `main` y en `push` a `main`. No se ejecuta si el cambio solo toca `docs/**` (con `paths-ignore`, sin patrones de negación `!`). Los `.md` fuera de `docs/` (como `AGENTS.md`) sí lo disparan, para que el check obligatorio `CI / verify` se reporte en esos PR.
 - `concurrency` por rama (`ci-${{ github.ref }}`) con `cancel-in-progress: true`, para que un push nuevo cancele la ejecución anterior.
 - `timeout-minutes: 15`.
 
