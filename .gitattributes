@@ -1,0 +1,11 @@
+# Fin de línea LF en el repositorio (desarrollo en Windows, CI en Linux).
+* text=auto eol=lf
+
+# Binarios: sin conversión.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff2 binary

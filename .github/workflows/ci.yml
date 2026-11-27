@@ -1,0 +1,110 @@
+# CI: ejecuta la "definición de terminado" de AGENTS.md (sección "Integración continua").
+# No despliega: Vercel despliega desde Git. Sin secretos reales: todas las
+# variables de entorno de este archivo son ficticias.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: cym_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d cym_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+      TZ: UTC
+      # Base de datos temporal del servicio (nunca Neon ni datos reales).
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/cym_ci
+      DATABASE_URL_UNPOOLED: postgresql://ci:ci@localhost:5432/cym_ci
+      # Valores ficticios: solo para que la app compile.
+      BETTER_AUTH_SECRET: ci-dummy-secret-not-used-in-production-0000
+      BETTER_AUTH_URL: http://localhost:3000
+      CLOUDINARY_CLOUD_NAME: ci-dummy
+      CLOUDINARY_API_KEY: ci-dummy
+      CLOUDINARY_API_SECRET: ci-dummy
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configurar pnpm (versión de packageManager)
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Configurar Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Caché de compilación de Next.js
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('app/**', 'components/**', 'lib/**', 'services/**', 'repositories/**', 'db/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      # Los pasos de Prisma se activan solos cuando exista prisma/schema.prisma.
+      - name: Generar el cliente de Prisma
+        if: hashFiles('prisma/schema.prisma') != ''
+        run: pnpm prisma generate
+
+      - name: Aplicar las migraciones desde cero
+        if: hashFiles('prisma/schema.prisma') != ''
+        run: pnpm prisma migrate deploy
+
+      - name: Verificar que el esquema no tenga cambios sin migración
+        if: hashFiles('prisma/schema.prisma') != ''
+        # Compara la base ya migrada con el esquema. --exit-code: 0 = sin cambios, 2 = hay cambios sin migrar (falla).
+        run: pnpm prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      - name: Formato (Prettier)
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Verificar tipos
+        run: pnpm typecheck
+
+      - name: Pruebas
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

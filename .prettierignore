@@ -1,0 +1,16 @@
+# Generados y dependencias
+.next/
+node_modules/
+generated/
+coverage/
+pnpm-lock.yaml
+next-env.d.ts
+
+# Migraciones de Prisma: SQL generado, no se reformatea
+prisma/migrations/
+
+# Documentación del cliente y archivos de reglas: se editan a mano.
+# AGENTS.md contiene un bloque que next dev debe encontrar intacto.
+docs/
+AGENTS.md
+CLAUDE.md

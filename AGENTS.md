@@ -31,6 +31,7 @@ Si el código y la documentación se contradicen, manda la documentación; si do
 - **Almacenamiento de imágenes:** Cloudinary (subida firmada desde el servidor, nunca con upload presets sin firmar; tipo de entrega `authenticated` y URLs firmadas generadas en el servidor; en la base de datos solo se guarda el `public_id` de cada foto).
 - **Validación:** Zod.
 - **Pruebas:** Vitest.
+- **Formato:** Prettier con `prettier-plugin-tailwindcss` (ver "Formato de código").
 - **Estilos:** Tailwind CSS **4.3** y CSS.
 - **Deploy:** Vercel.
 
@@ -38,8 +39,16 @@ No reemplaces ni agregues frameworks, ORM, bases de datos, librerías de autenti
 
 ## Gestor de paquetes y comandos
 - Usa siempre **pnpm** (`pnpm install`, `pnpm add`, `pnpm dlx`, `pnpm run <script>`). No uses `npm`, `npx`, `yarn` ni `bun`. El único lockfile permitido es `pnpm-lock.yaml`.
-- **Definición de terminado:** antes de dar una tarea por completa deben pasar `pnpm lint`, `pnpm exec tsc --noEmit`, `pnpm test` y `pnpm build`. Si alguno falla, repórtalo; no lo ocultes.
+- **Definición de terminado:** antes de dar una tarea por completa deben pasar `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test` y `pnpm build`, los mismos pasos del CI (ver "Integración continua"). Si cambias el esquema de Prisma, crea también su migración. Si alguno falla, repórtalo; no lo ocultes.
 - **Pruebas:** se usa **Vitest** (`pnpm test` ejecuta `vitest run`). Los archivos de prueba van junto al código que prueban con el sufijo `.test.ts`. Como mínimo deben tener pruebas unitarias: la máquina de estados, el cálculo de liquidación, la vigencia de garantía de producto y el plazo de garantía de servicio.
+
+## Formato de código (Prettier)
+- Configuración en `prettier.config.mjs`, con los valores por defecto de Prettier (comillas dobles, punto y coma, 80 columnas, fin de línea LF) y el plugin `prettier-plugin-tailwindcss`.
+- El plugin **ordena las clases de Tailwind** en el orden oficial, leyendo el tema desde `app/globals.css` (`tailwindStylesheet`). No ordenes clases a mano ni discutas su orden: lo decide el plugin.
+- Si el plugin manda una clase al principio de la lista, esa clase no existe en el tema (token mal escrito o eliminado). Corrígela; no la dejes así.
+- Ejecuta `pnpm format` antes de terminar una tarea. `pnpm format:check` corre en el CI y falla si algún archivo no tiene el formato.
+- `.prettierignore` excluye lo generado (`.next/`, `generated/`, `prisma/migrations/`, `pnpm-lock.yaml`), además de `docs/`, `AGENTS.md` y `CLAUDE.md`: se editan a mano y el bloque de Next.js de `AGENTS.md` debe quedar intacto.
+- ESLint revisa calidad y Prettier revisa formato; no agregues reglas de estilo a ESLint que choquen con Prettier.
 
 ## Arquitectura por capas (estricta)
 Monolito modular en 3 capas, en la raíz del proyecto (sin carpeta `src/`):
@@ -230,6 +239,58 @@ Objetivo: concurso Awwwards, entrega el **7 de diciembre de 2026**. La landing p
 | 3. Microinteracciones | 2 | Hover y presión en botones, transiciones de cambio de estado, esqueletos de carga, confirmaciones | Sin saltos de diseño; respeta `prefers-reduced-motion` |
 | 4. Movimiento | 3 | Transiciones entre páginas (View Transitions), animaciones de entrada en la vitrina, línea de tiempo animada del estado de la orden | Lighthouse ≥ 90 en rendimiento en la vitrina |
 | 5. Vitrina | 3 | Momentos "hero" en el login y la vista pública (Motion/GSAP), modo demo pulido y datos demo creíbles | Recorrido completo con la cuenta `DEMO` sin errores; metas de Lighthouse cumplidas |
+
+## Integración continua (GitHub Actions)
+El CI ejecuta exactamente la **definición de terminado**: si pasa en local, debe pasar en el CI, y al revés. El CI **no despliega**: el despliegue lo hace la integración de Git de Vercel (vista previa en cada PR, producción al fusionar en `main`).
+
+### Archivo y disparadores
+- Un único workflow: `.github/workflows/ci.yml`, con nombre `CI` y un job `verify` en `ubuntu-latest`.
+- Se ejecuta en `pull_request` hacia `main` y en `push` a `main`. No se ejecuta si el cambio solo toca `docs/**` o archivos `**/*.md` (con `paths-ignore`, sin patrones de negación `!`).
+- `concurrency` por rama (`ci-${{ github.ref }}`) con `cancel-in-progress: true`, para que un push nuevo cancele la ejecución anterior.
+- `timeout-minutes: 15`.
+
+### Seguridad
+- `permissions: contents: read` a nivel de workflow; ningún job pide más permisos.
+- Las acciones de terceros se fijan por **SHA completo del commit**, con la versión en un comentario (`actions/checkout@<sha> # v5.x.x`), nunca por etiqueta móvil (`@v5`, `@main`). Al crear o actualizar el workflow, consulta la versión estable vigente de cada acción.
+- **Sin secretos reales en el CI.** No se conecta a Neon, Cloudinary ni Better Auth de verdad. Las variables de entorno necesarias para compilar llevan valores ficticios declarados en el propio workflow (por ejemplo `BETTER_AUTH_SECRET: ci-dummy-secret-not-used-in-production`). Si algún paso necesita un secreto real, detente y pide autorización.
+- El código no debe acceder a la base de datos ni a servicios externos durante `pnpm build`: las páginas con datos son dinámicas y quedan detrás de `<Suspense>`. Si el build falla por falta de conexión, el error está en el código, no en el CI.
+
+### Entorno
+- Node.js **24 (LTS)** con `actions/setup-node`, usando `cache: pnpm`.
+- pnpm con `pnpm/action-setup`. La versión sale del campo `packageManager` de `package.json`; no la repitas en el workflow.
+- `NEXT_TELEMETRY_DISABLED: 1` y `TZ: UTC`, para reproducir el entorno de Vercel y detectar errores de zona horaria (las fechas de negocio se calculan en `America/Lima`).
+- Caché de `.next/cache` con `actions/cache`, con una clave que combine el hash de `pnpm-lock.yaml` y el de los archivos fuente.
+- Servicio `postgres` (imagen oficial, versión mayor igual a la de Neon) con healthcheck. Solo se usa para validar migraciones y para pruebas de integración, nunca con datos reales.
+
+### Pasos del job `verify` (en este orden; cualquier fallo detiene el job)
+1. `actions/checkout`.
+2. Configurar pnpm y Node (con caché del store).
+3. `pnpm install --frozen-lockfile`. Falla si `pnpm-lock.yaml` no coincide con `package.json`; nunca uses `--no-frozen-lockfile` en el CI.
+4. `pnpm prisma generate`.
+5. **Migraciones:** `pnpm prisma migrate deploy` contra el Postgres del servicio, para comprobar que todas las migraciones se aplican desde cero. Después, `pnpm prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code` (flags verificados en Prisma 7.10.1), que falla si hay cambios en el esquema sin migración. Los pasos de Prisma solo se ejecutan cuando existe `prisma/schema.prisma`.
+6. `pnpm format:check`.
+7. `pnpm lint`.
+8. `pnpm typecheck`.
+9. `pnpm test` (Vitest, con `DATABASE_URL` apuntando al Postgres del servicio para las pruebas de integración).
+10. `pnpm build`.
+
+### Scripts requeridos en `package.json`
+| Script | Comando |
+| --- | --- |
+| `format` | `prettier --write .` |
+| `format:check` | `prettier --check .` |
+| `lint` | `eslint` |
+| `typecheck` | `tsc --noEmit` |
+| `test` | `vitest run` |
+| `build` | `next build` |
+
+La definición de terminado y el CI usan estos nombres. Si cambias uno, actualiza ambos.
+
+### Reglas de trabajo
+- `main` está protegida: solo se fusiona por PR y con el check `CI / verify` en verde. No se usa `--no-verify` ni se omiten pasos para que el CI pase.
+- Si el CI falla, se corrige la causa. No se desactiva el paso, no se agregan `continue-on-error` ni se marcan pruebas como `skip` sin avisar al usuario.
+- El desarrollo es en Windows y el CI corre en Linux. `.gitattributes` fija `* text=auto eol=lf` para evitar diferencias de fin de línea, y las rutas de importación deben respetar mayúsculas y minúsculas exactas, porque Linux las distingue.
+- **Fuera del CI por ahora** (requieren autorización, porque agregan herramientas): Lighthouse CI para las metas de la vitrina, pruebas end-to-end con navegador y Dependabot o Renovate.
 
 ## Git
 - Commits pequeños en español, en modo imperativo y con prefijo de tipo: `feat: registrar orden de servicio`, `fix: ...`, `chore: ...`.
