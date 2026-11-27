@@ -8,12 +8,10 @@ on:
     branches: [main]
     paths-ignore:
       - "docs/**"
-      - "**/*.md"
   push:
     branches: [main]
     paths-ignore:
       - "docs/**"
-      - "**/*.md"
 
 permissions:
   contents: read

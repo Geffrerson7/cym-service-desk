@@ -25,7 +25,7 @@ Si el código y la documentación se contradicen, manda la documentación; si do
 
 ## Stack (no negociable)
 - **Framework:** Next.js **16.4.6** (App Router) con React **19.3** y TypeScript. Es más nuevo que tus datos de entrenamiento: consulta `node_modules/next/dist/docs/` antes de usar una API (ver bloque de Next.js arriba). Ejemplos: el antiguo `middleware.ts` ahora es `proxy.ts`; `cacheComponents` está activado en `next.config.ts`.
-- **Base de datos:** PostgreSQL en Neon.
+- **Base de datos:** PostgreSQL en Neon (vista previa, demo y producción) y PostgreSQL en **Docker** solo para desarrollo local (ver "Entorno de desarrollo local").
 - **ORM:** Prisma **v7.10.1** (ver sección Prisma).
 - **Autenticación:** Better Auth (email y contraseña, sesiones en base de datos, caché en cookie cifrada JWE y plugin JWT).
 - **Almacenamiento de imágenes:** Cloudinary (subida firmada desde el servidor, nunca con upload presets sin firmar; tipo de entrega `authenticated` y URLs firmadas generadas en el servidor; en la base de datos solo se guarda el `public_id` de cada foto).
@@ -61,6 +61,23 @@ Monolito modular en 3 capas, en la raíz del proyecto (sin carpeta `src/`):
 
 **Resultado de Server Actions:** devuelve siempre `{ ok: true, data } | { ok: false, error: string }` con `error` en español, listo para mostrar al usuario. Nunca envíes al navegador mensajes internos, stack traces ni errores de Prisma.
 
+## Entorno de desarrollo local (Docker + PostgreSQL)
+- En desarrollo la base de datos es **PostgreSQL en Docker**, nunca Neon. Neon queda para los despliegues de Vercel (vista previa, demo y producción). Así no se ensucian las ramas de Neon y se puede trabajar sin conexión.
+- El servicio se define en `compose.yaml` (raíz del proyecto) con Docker Compose:
+  - Imagen oficial `postgres:17`: la misma versión mayor que Neon y que el servicio del CI.
+  - Nombre del servicio `db`, puerto `5432:5432`, volumen con nombre `cym-pgdata` para que los datos sobrevivan al reiniciar, y `healthcheck` con `pg_isready`.
+  - Usuario, contraseña y base salen de variables del `.env` local (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`), con valores por defecto solo para desarrollo. No escribas contraseñas en `compose.yaml`.
+  - Una segunda base, `cym_test`, para las pruebas de integración de Vitest, creada con un script en `docker/initdb/`. Las pruebas nunca usan la base de desarrollo.
+- En el `.env` local, `DATABASE_URL` y `DATABASE_URL_UNPOOLED` apuntan al mismo Postgres de Docker (`postgresql://<usuario>:<contraseña>@localhost:5432/<base>`). En local no hay pooler, así que las dos URLs son iguales. `.env.example` documenta estos valores de desarrollo.
+- Flujo de trabajo:
+  1. `docker compose up -d`: levanta Postgres.
+  2. `pnpm prisma migrate dev`: aplica y crea migraciones (solo contra Docker; nunca `migrate dev` contra Neon).
+  3. `pnpm prisma db seed`: crea el `ADMIN_GENERAL` inicial y los datos base. Con `DEMO_MODE=true` en el `.env` local también se pueden cargar los datos ficticios de la demo para probarla.
+  4. `pnpm dev`.
+  - Para borrar todo y empezar de cero: `docker compose down -v` y repetir los pasos.
+- **Contra Neon solo corre `pnpm prisma migrate deploy`**, en el despliegue. Ninguna tarea de desarrollo apunta a Neon.
+- Docker es solo una herramienta de desarrollo: la app no se despliega en contenedores (se despliega en Vercel), así que no crees un `Dockerfile` para la app.
+
 ## Prisma 7.10.1
 - El esquema (`prisma/schema.prisma`) **no lleva URL de conexión**. La URL para la CLI y las migraciones va en `prisma.config.ts` con `env('DATABASE_URL_UNPOOLED')`.
 - `prisma.config.ts` **no carga `.env` automáticamente**: debe empezar con `import 'dotenv/config'`.
@@ -71,11 +88,12 @@ Monolito modular en 3 capas, en la raíz del proyecto (sin carpeta `src/`):
 
 ## Variables de entorno
 Solo en el servidor; nunca con prefijo `NEXT_PUBLIC_` ni enviadas al navegador. Mantén `.env.example` actualizado (sin valores reales) y nunca subas `.env` al repositorio.
-- `DATABASE_URL` (Neon pooled, runtime) y `DATABASE_URL_UNPOOLED` (Neon directo, migraciones)
+- `DATABASE_URL` (runtime) y `DATABASE_URL_UNPOOLED` (migraciones). En Vercel: Neon con pooler y Neon directo. En local: las dos apuntan al Postgres de Docker.
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`: solo en el `.env` local, para `compose.yaml`.
 - `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`
 - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
 - `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`
-- `DEMO_MODE` (`true` solo en el despliegue de demostración), `SEED_DEMO_EMAIL`, `SEED_DEMO_PASSWORD`
+- `DEMO_MODE` (`true` solo en el despliegue de demostración), `DEMO_USER_EMAIL`, `DEMO_USER_PASSWORD`. Las credenciales demo las usan `prisma/seed-demo.ts` (para crear la cuenta) y el botón "Entrar como demo" (para iniciar sesión). Nunca llegan al navegador.
 
 ## Seguridad y autenticación (Better Auth)
 - **Sesión solo en el servidor:** nunca uses `useSession()`, `authClient.getSession()` ni hooks de sesión en Client Components. Se lee con `auth.api.getSession` en Server Components, Server Actions y rutas de API.
@@ -90,6 +108,13 @@ Solo en el servidor; nunca con prefijo `NEXT_PUBLIC_` ni enviadas al navegador. 
 Enum `Role`: `ADMIN_GENERAL`, `ADMIN_SUCURSAL`, `TECNICO`, `DEMO`. El **cliente no es un usuario** ni un valor de `Role`: no tiene cuenta y solo accede por enlace o QR.
 - `DEMO` (jurado y visitantes): **solo lectura**. Ve las mismas pantallas y datos que `ADMIN_GENERAL`, pero toda mutación (Server Action o ruta de API distinta de `GET`) se rechaza **en `services/`** con el mensaje "La cuenta demo es de solo lectura." Ocultar botones en la interfaz no es suficiente. La interfaz muestra un aviso fijo "Modo demo · solo lectura" y deja visibles pero deshabilitados los botones de acción, para que se pueda recorrer el producto.
 - **La demo nunca usa datos reales.** Corre en un despliegue y una rama de Neon separados (`DEMO_MODE=true`), con datos ficticios creados por `prisma/seed-demo.ts`. En ese modo, la vista pública de seguimiento también es de solo lectura (aprobar o rechazar cotizaciones queda deshabilitado). La cuenta `DEMO` no existe en producción.
+- **Botón "Entrar como demo":** el jurado y los visitantes entran a la demo sin escribir credenciales.
+  - Aparece en la pantalla de inicio de sesión **solo si `DEMO_MODE=true`**. Lo decide el servidor; el botón no se envía al navegador en otro caso.
+  - Es un formulario sin campos que llama a una Server Action. La acción vuelve a comprobar `DEMO_MODE=true` (si no, responde con error y no hace nada), lee `DEMO_USER_EMAIL` y `DEMO_USER_PASSWORD` de las variables de entorno e inicia sesión **en el servidor** con Better Auth (`auth.api` con email y contraseña), que deja la cookie de sesión. Luego redirige al panel.
+  - Las credenciales demo **nunca** se envían al navegador: ni en props, ni en campos ocultos, ni en el HTML, ni con `NEXT_PUBLIC_`. El usuario no las ve ni puede copiarlas.
+  - La sesión demo sigue todas las reglas normales: el servidor carga el usuario y aplica el rol `DEMO` (solo lectura) en cada acción.
+  - Si la cuenta demo no existe o está desactivada, se muestra "La demo no está disponible en este momento." sin revelar el motivo.
+  - El botón es parte de la vitrina: va debajo del formulario normal, separado por "o", con el texto exacto "Entrar como demo" y una línea de ayuda "Recorre el sistema con datos de ejemplo, en solo lectura.".
 - `ADMIN_GENERAL` (dueño): acceso total a todas las sucursales (con filtro opcional por sucursal), gestión de sucursales, personal, tarifas globales y marca (logo e ícono). Puede hacer todo lo que hace un `ADMIN_SUCURSAL` en cualquier sucursal.
 - `ADMIN_SUCURSAL` (recepción / caja): solo opera y ve el detalle de las órdenes de su sucursal. En el historial global de un cliente, las órdenes de otras sucursales se muestran solo en resumen (número, sucursal, equipo, estado y fecha), sin acceso al detalle.
 - `TECNICO`: pertenece a una sucursal; solo ve y actualiza las órdenes asignadas a su propio `id`. No accede a la sección de Clientes.
@@ -245,7 +270,7 @@ El CI ejecuta exactamente la **definición de terminado**: si pasa en local, deb
 
 ### Archivo y disparadores
 - Un único workflow: `.github/workflows/ci.yml`, con nombre `CI` y un job `verify` en `ubuntu-latest`.
-- Se ejecuta en `pull_request` hacia `main` y en `push` a `main`. No se ejecuta si el cambio solo toca `docs/**` o archivos `**/*.md` (con `paths-ignore`, sin patrones de negación `!`).
+- Se ejecuta en `pull_request` hacia `main` y en `push` a `main`. No se ejecuta si el cambio solo toca `docs/**` (con `paths-ignore`, sin patrones de negación `!`). Los `.md` fuera de `docs/` (como `AGENTS.md`) sí lo disparan, para que el check obligatorio `CI / verify` se reporte en esos PR.
 - `concurrency` por rama (`ci-${{ github.ref }}`) con `cancel-in-progress: true`, para que un push nuevo cancele la ejecución anterior.
 - `timeout-minutes: 15`.
 
