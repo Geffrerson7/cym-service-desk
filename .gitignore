@@ -45,4 +45,8 @@ next-env.d.ts
 # prisma
 /generated/
 
+# claude code: se versionan las skills (.claude/skills/); se ignora lo personal
+/.claude/settings.local.json
+/.claude/worktrees/
+
 /docs
