@@ -27,7 +27,12 @@ const PATHS = {
 const DRAW =
   "motion-safe:[stroke-dasharray:1] motion-safe:[stroke-dashoffset:1] motion-safe:animate-logo-draw";
 
-export function LogoMark({ className, title, variant = "full", animated = false }: LogoMarkProps) {
+export function LogoMark({
+  className,
+  title,
+  variant = "full",
+  animated = false,
+}: LogoMarkProps) {
   const { strokeWidth, signal } = PATHS[variant];
   const decorative = !title;
   const draw = (delay: string) => (animated ? `${DRAW} ${delay}` : "");

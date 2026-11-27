@@ -20,7 +20,7 @@ export function ThemeToggle() {
       onClick={toggleTheme}
       aria-label="Cambiar entre tema claro y oscuro"
       title="Cambiar tema"
-      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line bg-card text-fg-muted hover:bg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface print:hidden"
+      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line bg-card text-fg-muted hover:bg-muted hover:text-fg focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none print:hidden"
     >
       {/* Luna: se muestra en tema claro */}
       <svg
